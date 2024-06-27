@@ -300,6 +300,8 @@ namespace openvpn {
       // transmit username/password creds to server (client-only)
       bool xmit_creds = true;
 
+      bool do_tcp_split_reset = false;
+
       // Transport protocol, i.e. UDPv4, etc.
       Protocol protocol; // set with set_protocol()
 
@@ -376,6 +378,8 @@ namespace openvpn {
 	protocol = Protocol();
 	pid_mode = PacketIDReceive::UDP_MODE;
 	key_direction = default_key_direction;
+
+	do_tcp_split_reset = opt.exists("tcp-split-reset");
 
 	// layer
 	{
@@ -2232,6 +2236,15 @@ namespace openvpn {
 	pkt.opcode = initial_op(true, proto.tls_wrap_mode == TLS_CRYPT_V2);
 	pkt.frame_prepare(*proto.config->frame, Frame::WRITE_SSL_INIT);
 	raw_send(std::move(pkt));
+
+	if ((*proto.config).protocol.is_tcp() && (*proto.config).do_tcp_split_reset) {
+		for (uint32_t i=0; i<(*proto.config).rng->randrange32(2, 5); i++) {
+			Packet pkt2;
+			pkt2.opcode = initial_op(true, proto.tls_wrap_mode == TLS_CRYPT_V2);
+			pkt2.frame_prepare(*proto.config->frame, Frame::WRITE_SSL_INIT);
+			raw_send(std::move(pkt2));
+		}
+	}
       }
 
       void raw_recv(Packet&& raw_pkt)  // called by ProtoStackBase

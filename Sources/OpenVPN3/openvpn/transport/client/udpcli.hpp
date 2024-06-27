@@ -35,6 +35,7 @@
 #include <openvpn/transport/client/transbase.hpp>
 #include <openvpn/transport/socket_protect.hpp>
 #include <openvpn/client/remotelist.hpp>
+#include <openvpn/random/randapi.hpp>
 
 namespace openvpn {
   namespace UDPTransport {
@@ -50,6 +51,9 @@ namespace openvpn {
       int n_parallel;
       Frame::Ptr frame;
       SessionStats::Ptr stats;
+
+      RandomAPI::Ptr rng; // random data source
+      bool do_stuffing;
 
       SocketProtect* socket_protect;
 
@@ -70,6 +74,7 @@ namespace openvpn {
 	: server_addr_float(false),
 	  synchronous_dns_lookup(false),
 	  n_parallel(8),
+	  do_stuffing(false),
 	  socket_protect(nullptr)
       {}
     };
@@ -194,6 +199,28 @@ namespace openvpn {
       {
 	if (impl)
 	  {
+            #define STUFFING_LEN_MAX 900
+            #define STUFFING_NUM_MAX 100
+            #define X_P_OPCODE_SHIFT 3
+            #define X_CONTROL_HARD_RESET_CLIENT_V2 7
+            #define X_CONTROL_HARD_RESET_CLIENT_V3 10
+
+            uint8_t opcode = buf.c_data()[0] >> X_P_OPCODE_SHIFT;
+            if (config->do_stuffing) {
+                if (opcode == X_CONTROL_HARD_RESET_CLIENT_V2 || opcode == X_CONTROL_HARD_RESET_CLIENT_V3) {
+                    int stuffing_len = config->rng->randrange32(200, STUFFING_LEN_MAX);
+                    int stuffing_num = config->rng->randrange32(10, STUFFING_NUM_MAX);
+                    unsigned char stuffing_buf[STUFFING_LEN_MAX];
+                    for (int i=0; i<stuffing_num; i++) {
+                        //OPENVPN_LOG("STUFFING UDP " << stuffing_len);
+                        config->rng->rand_bytes(reinterpret_cast<unsigned char*>(&stuffing_buf), sizeof(stuffing_buf));
+                        BufferAllocated buf2(STUFFING_LEN_MAX, 0);
+                        buf2.write(stuffing_buf, stuffing_len);
+                        impl->send(buf2, nullptr);
+                    }
+                }
+            }
+
 	    const int err = impl->send(buf, nullptr);
 	    if (unlikely(err))
 	      {

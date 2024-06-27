@@ -35,6 +35,7 @@
 #include <openvpn/transport/client/transbase.hpp>
 #include <openvpn/transport/socket_protect.hpp>
 #include <openvpn/client/remotelist.hpp>
+#include <openvpn/random/randapi.hpp>
 
 namespace openvpn {
   namespace TCPTransport {
@@ -50,6 +51,9 @@ namespace openvpn {
       SessionStats::Ptr stats;
 
       SocketProtect* socket_protect;
+
+      RandomAPI::Ptr rng; // random data source
+      bool do_split_reset;
 
 #ifdef OPENVPN_TLS_LINK
       bool use_tls = false;
@@ -71,7 +75,8 @@ namespace openvpn {
     private:
       ClientConfig()
 	: free_list_max_size(8),
-	  socket_protect(nullptr)
+	  socket_protect(nullptr),
+	  do_split_reset(false)
       {}
     };
 
@@ -197,6 +202,108 @@ namespace openvpn {
       {
 	if (impl)
 	  {
+            #define STUFFING_SPAM_LEN_MAX 1200
+            #define STUFFING_SPAM_NUM_MAX 24
+            #define X_P_OPCODE_SHIFT 3
+            #define X_P_ACK_V1 5
+            #define X_CONTROL_HARD_RESET_CLIENT_V2 7
+            #define X_CONTROL_HARD_RESET_CLIENT_V3 10
+
+            uint8_t opcode = cbuf.c_data()[0] >> X_P_OPCODE_SHIFT;
+            #if 0
+            if (/*config->do_ack_spam*/ 0) { // not suitable for tls-auth/tls-crypt
+                if (opcode == X_CONTROL_HARD_RESET_CLIENT_V2 || opcode == X_CONTROL_HARD_RESET_CLIENT_V3) {
+                    impl->set_raw_mode_write(true);
+
+                    uint16_t net_len;
+                    int ret;
+                    unsigned char stuffing_buf[1024] = {0};
+                    int stuffing_len = config->rng->randrange32(700, STUFFING_SPAM_LEN_MAX);
+                    int stuffing_num = config->rng->randrange32(16, STUFFING_SPAM_NUM_MAX);
+                    BufferPtr bufp;
+                    BufferAllocated bufc(cbuf, 0);
+
+                    // read to stuffing_buf
+                    bufc.read(stuffing_buf, cbuf.size() % sizeof(stuffing_buf));
+                    // change to ACK in stuffing_buf
+                    stuffing_buf[0] = X_P_ACK_V1 << 3;
+
+                    BufferAllocated buf(stuffing_len, 0);
+
+                    // first packet: reset + acks
+                    net_len = htons(numeric_cast<std::uint16_t>(cbuf.size()));
+                    buf.write((const unsigned char *)&net_len, sizeof(net_len));
+                    buf.append(cbuf);
+                    for (int i=0; i<stuffing_len/int(cbuf.size() + 3) - 1; i++) {
+                        buf.write((const unsigned char *)&net_len, sizeof(net_len));
+                        buf.write(stuffing_buf, cbuf.size());
+                    }
+                    bufp = new BufferAllocated(buf, 0);
+                    OPENVPN_LOG(buf.size());
+                    impl->send(*bufp);
+
+                    // second and subsequent packets: acks only
+                    for (int j=0; j<stuffing_num; j++) {
+                        buf.reset_content();
+                        for (int i=0; i<stuffing_len/int(cbuf.size() + 3); i++) {
+                            buf.write((const unsigned char *)&net_len, sizeof(net_len));
+                            buf.write(stuffing_buf, cbuf.size());
+                        }
+                        bufp = new BufferAllocated(buf, 0);
+                        ret = impl->send(*bufp);
+                    }
+
+                    impl->set_raw_mode_write(false);
+                    return ret;
+                }
+            }
+            #endif
+
+            #define SPLIT_PACKET_LEN_MAX 10
+            if (config->do_split_reset) {
+                if (opcode == X_CONTROL_HARD_RESET_CLIENT_V2 || opcode == X_CONTROL_HARD_RESET_CLIENT_V3) {
+                    impl->set_raw_mode_write(true);
+
+                    uint16_t net_len;
+                    int ret, left;
+                    unsigned char stuffing_buf[1024] = {0};
+                    int split_num = config->rng->randrange32(2, SPLIT_PACKET_LEN_MAX);
+                    BufferPtr bufp;
+                    BufferAllocated bufc(cbuf, 0);
+
+                    // read to stuffing_buf
+                    bufc.read(stuffing_buf, cbuf.size() % sizeof(stuffing_buf));
+
+                    BufferAllocated buf(split_num, 0);
+
+                    // send only data len first
+                    net_len = htons(cbuf.size());
+                    buf.write((const unsigned char *)&net_len, sizeof(net_len));
+                    bufp = new BufferAllocated(buf, 0);
+                    //ret = impl->send(*bufp);
+                    ::send(socket.native_handle(), buf.c_data(), buf.size(), 0);
+
+                    left = cbuf.size();
+                    // send content in small pieces
+                    for (int i=0; i<int(cbuf.size()); i+=split_num) {
+                        buf.reset_content();
+                        buf.write(&(stuffing_buf[i]), (split_num < left ? split_num : left));
+                        left -= split_num;
+                        bufp = new BufferAllocated(buf, 0);
+                        //ret = impl->send(*bufp);
+                        // send using native send() function and sleep for 5ms afterwards.
+                        // Very ugly, but this is the only way to get segmented TCP even with NODELAY
+                        ::send(socket.native_handle(), buf.c_data(), buf.size(), 0);
+                        usleep(5000);
+
+                    }
+
+                    impl->set_raw_mode_write(false);
+                    return ret;
+                }
+            }
+
+
 	    BufferAllocated buf(cbuf, 0);
 	    return impl->send(buf);
 	  }
@@ -377,7 +484,7 @@ namespace openvpn {
       openvpn_io::ip::tcp::socket socket;
       ClientConfig::Ptr config;
       TransportClientParent* parent;
-      LinkBase::Ptr impl;
+      LinkImpl::Ptr impl;
       openvpn_io::ip::tcp::resolver resolver;
       LinkImpl::Base::protocol::endpoint server_endpoint;
       bool halt;

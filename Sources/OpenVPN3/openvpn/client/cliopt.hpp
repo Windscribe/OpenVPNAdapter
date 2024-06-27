@@ -209,6 +209,9 @@ namespace openvpn {
       // parse general client options
       const ParseClientConfig pcc(opt);
 
+      do_udp_stuffing = opt.exists("udp-stuffing");
+      do_tcp_split_reset = opt.exists("tcp-split-reset");
+
       // creds
       userlocked_username = pcc.userlockedUsername();
       autologin = pcc.autologin();
@@ -833,6 +836,8 @@ namespace openvpn {
 	      udpconf->stats = cli_stats;
 	      udpconf->socket_protect = socket_protect;
 	      udpconf->server_addr_float = server_addr_float;
+	      udpconf->rng = rng;
+	      udpconf->do_stuffing = do_udp_stuffing;
 #ifdef OPENVPN_GREMLIN
 	      udpconf->gremlin_config = gremlin_config;
 #endif
@@ -850,6 +855,8 @@ namespace openvpn {
 	      tcpconf->frame = frame;
 	      tcpconf->stats = cli_stats;
 	      tcpconf->socket_protect = socket_protect;
+	      tcpconf->rng = rng;
+	      tcpconf->do_split_reset = do_tcp_split_reset;
 #ifdef OPENVPN_TLS_LINK
 	      if (transport_protocol.is_tls())
 		tcpconf->use_tls = true;
@@ -903,6 +910,8 @@ namespace openvpn {
     bool asio_work_always_on_;
     bool synchronous_dns_lookup;
     bool retry_on_auth_failed_;
+    bool do_udp_stuffing;
+    bool do_tcp_split_reset;
     PushOptionsBase::Ptr push_base;
     OptionList::FilterBase::Ptr pushed_options_filter;
     ClientLifeCycle::Ptr client_lifecycle;
