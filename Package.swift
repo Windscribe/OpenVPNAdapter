@@ -1,4 +1,4 @@
-// swift-tools-version:5.1
+// swift-tools-version:5.10
 
 import PackageDescription
 
@@ -7,6 +7,7 @@ let package = Package(
     platforms: [
         .iOS("9.0"),
         .macOS("10.11"),
+        .tvOS(.v17)
     ],
     products: [
         .library(name: "OpenVPNAdapter", type: .static, targets: ["OpenVPNAdapter"]),
